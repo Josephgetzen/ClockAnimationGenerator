@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transparent Countdown Recorder</title>
+    <style>
+        :root {
+            --primary-color: #00ffcc;
+            --bg-color: #1a1a1a;
+        }
+
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: var(--bg-color);
+            /* Checkered pattern to visualize transparency */
+            background-image: radial-gradient(#222 20%, transparent 20%), radial-gradient(#222 20%, transparent 20%);
+            background-position: 0 0, 10px 10px;
+            background-size: 20px 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            color: white;
+        }
+
+        .controls {
+            z-index: 10;
+            margin-bottom: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 25px;
+            border-radius: 16px;
+            border: 1px solid #444;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        input {
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #444;
+            background: #000;
+            color: white;
+            width: 80px;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        button {
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            background-color: var(--primary-color);
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.2s;
+        }
+
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        button:active { transform: scale(0.95); }
+
+        #downloadLink {
+            display: none;
+            margin-top: 15px;
+            color: var(--primary-color);
+            text-decoration: none;
+            font-weight: bold;
+            border: 1px solid var(--primary-color);
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        canvas {
+            max-width: 90vw;
+            max-height: 60vh;
+            filter: drop-shadow(0 0 20px rgba(0,255,204,0.3));
+        }
+
+        .status {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="controls">
+        <div style="margin-bottom: 10px;">Countdown Seconds:</div>
+        <input type="number" id="secondsInput" value="5" min="1" max="60">
+        
+        <div class="btn-group">
+            <button id="startBtn">Start & Record</button>
+        </div>
+
+        <div id="status" class="status">Ready to record</div>
+        <a id="downloadLink">Download WebM (Transparent)</a>
+    </div>
+
+    <canvas id="timerCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('timerCanvas');
+        const ctx = canvas.getContext('2d');
+        const input = document.getElementById('secondsInput');
+        const startBtn = document.getElementById('startBtn');
+        const downloadLink = document.getElementById('downloadLink');
+        const statusText = document.getElementById('status');
+
+        // High resolution for recording
+        const size = 800;
+        canvas.width = size;
+        canvas.height = size;
+
+        let animationId;
+        let startTime;
+        let totalDuration;
+        let mediaRecorder;
+        let recordedChunks = [];
+
+        function formatTime(ms) {
+            const totalSeconds = Math.ceil(ms / 1000);
+            const mins = Math.floor(totalSeconds / 60);
+            const secs = totalSeconds % 60;
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function draw(timestamp) {
+            if (!startTime) startTime = timestamp;
+            const elapsed = timestamp - startTime;
+            const remaining = Math.max(0, totalDuration - elapsed);
+            const progress = remaining / totalDuration;
+
+            // CLEAR CANVAS (Crucial for transparency)
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const radius = 300;
+
+            // 1. Draw Static Background Ring (Semi-transparent)
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.lineWidth = 25;
+            ctx.stroke();
+
+            // 2. Draw Moving Progress Ring
+            if (remaining > 0) {
+                ctx.beginPath();
+                const startAngle = -0.5 * Math.PI;
+                const endAngle = startAngle + (Math.PI * 2 * progress);
+                
+                ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+                ctx.strokeStyle = '#00ffcc';
+                ctx.lineWidth = 25;
+                ctx.lineCap = 'round';
+                // Glow effect
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = '#00ffcc';
+                ctx.stroke();
+                ctx.shadowBlur = 0;
+            }
+
+            // 3. Draw Text
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 120px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(formatTime(remaining), centerX, centerY);
+
+            if (remaining > 0) {
+                animationId = requestAnimationFrame(draw);
+            } else {
+                stopRecording();
+            }
+        }
+
+        function startRecording() {
+            recordedChunks = [];
+            // Capture at 60 FPS
+            const stream = canvas.captureStream(60);
+            
+            // Check supported types - WebM VP9 supports alpha (transparency)
+            const options = { mimeType: 'video/webm; codecs=vp9' };
+            mediaRecorder = new MediaRecorder(stream, options);
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                downloadLink.href = url;
+                downloadLink.download = `countdown_${input.value}s.webm`;
+                downloadLink.style.display = 'block';
+                statusText.innerText = "Recording complete!";
+                startBtn.disabled = false;
+            };
+
+            mediaRecorder.start();
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            cancelAnimationFrame(animationId);
+        }
+
+        startBtn.addEventListener('click', () => {
+            const secs = parseFloat(input.value);
+            if (isNaN(secs) || secs <= 0) return;
+
+            // UI Reset
+            startBtn.disabled = true;
+            downloadLink.style.display = 'none';
+            statusText.innerText = "Recording... Keep tab active";
+
+            // Logic Reset
+            totalDuration = secs * 1000;
+            startTime = null;
+            
+            startRecording();
+            animationId = requestAnimationFrame(draw);
+        });
+
+        // Initial Frame
+        draw(0);
+    </script>
+</body>
+</html>
